@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.ComponentModel;
 
 public struct CandidateMove
 {
@@ -16,6 +17,7 @@ public class MyBot : IChessBot
 {
     Utils _utils;
     MethodInfo[] _methods;
+    bool botIsWhite;
 
     public MyBot()
     {
@@ -25,81 +27,80 @@ public class MyBot : IChessBot
 
     public Move Think(Board board, Timer timer)
     {
-        ulong myPieceBitboard;
-        ulong enemyPieceBitBoard;
+        botIsWhite = board.IsWhiteToMove;
 
-        List<CandidateMove> candidateMoves = new ();
-
-        // Evaulate moves
+        // Get a list of all legal moves.
         Move[] moves = board.GetLegalMoves();
 
-        Move nextMove = moves[0];
+        // Initialize the best move and the best score.
+        Move bestMove = moves[0];
+        double bestScore = double.NegativeInfinity;
+
+        // Perform the minimax search with alpha-beta pruning.
+        foreach (Move move in moves)
+        {
+            board.MakeMove(move);
+            double score = -Minimax(board, 3, double.NegativeInfinity, double.PositiveInfinity);
+            board.UndoMove(move);
+
+            // Update the best move and the best score.
+            if (score > bestScore)
+            {
+                bestMove = move;
+                bestScore = score;
+            }
+        }
+
+        // Return the best move.
+        return bestMove;
+    }
+
+    private double Minimax(Board board, int depth, double alpha, double beta)
+    {
+        if (depth == 0)
+        {
+            return ExecuteEvalLoop(board);
+        }
+
+        Move[] moves = board.GetLegalMoves();
+        double score = double.NegativeInfinity;
 
         foreach (Move move in moves)
         {
             board.MakeMove(move);
-
-            myPieceBitboard = GetMyBitBoard(board);
-            enemyPieceBitBoard = GetEnemyBitBoard(board, myPieceBitboard);
-
-            double myScore = ExecuteEvalLoop(myPieceBitboard);
-            double enemyScore = ExecuteEvalLoop(enemyPieceBitBoard);
-
-            AddCandidateMove(candidateMoves, new CandidateMove { 
-                move = move, myScore = myScore, enemyScore = enemyScore });
-
+            score = Math.Max(score, -Minimax(board, depth - 1, -beta, -alpha));
             board.UndoMove(move);
-        }
 
-        double maxScore = -100;
-        foreach (CandidateMove candidateMove in candidateMoves)
-        {
-            // Make move so enemy has updated board
-            board.MakeMove(candidateMove.move);
-
-            Move[] enemyMoves = board.GetLegalMoves();
-            foreach (Move move in enemyMoves)
+            alpha = Math.Max(alpha, score);
+            if (alpha >= beta)
             {
-                // Make move so enemy has updated board
-                board.MakeMove(move);
-
-                myPieceBitboard = GetMyBitBoard(board);
-                enemyPieceBitBoard = GetEnemyBitBoard(board, myPieceBitboard);
-
-                double myScore = ExecuteEvalLoop(myPieceBitboard);
-                double enemyScore = ExecuteEvalLoop(enemyPieceBitBoard);
-
-                if (myScore - enemyScore > maxScore)
-                {
-                    nextMove = candidateMove.move;
-                    maxScore = myScore - enemyScore;
-                }
-
-
-                board.UndoMove(move);
+                break;  // Alpha-beta pruning
             }
-
-
-            board.UndoMove(candidateMove.move);
         }
 
-
-        return nextMove;
+        return score;
     }
 
-
-    private double ExecuteEvalLoop(ulong bitBoard)
+    private double ExecuteEvalLoop(Board board)
     {
+        EvalMetrics evalMetrics = new(board);
+
         double score = 0;
-        // Apply all rules
         foreach (MethodInfo method in _methods)
         {
             // Check if the method has any parameters, since your methods are parameterless.
             ParameterInfo[] parameters = method.GetParameters();
-            if (parameters.Length == 1 && parameters[0].ParameterType == typeof(ulong))
+            if (parameters.Length == 0 && method.ReturnType == typeof(double))
             {
                 // If method requires ulong argument, invoke with the required argument
-                score += (double) method.Invoke(null, new object[] { bitBoard });
+                if (board.IsWhiteToMove == botIsWhite)
+                {
+                    score += (double)method.Invoke(evalMetrics, null);
+                }
+                else
+                {
+                    score -= (double)method.Invoke(evalMetrics, null);
+                } 
             }
         }
 
@@ -137,11 +138,6 @@ public class MyBot : IChessBot
         }
     }
 
-    private void Search(Board board, int depth) 
-    {
-        
-    }
-
     private ulong SimulateMove(Move move, ref ulong bitBoard)
     {
         BitboardHelper.SetSquare(ref bitBoard, move.TargetSquare);
@@ -162,8 +158,19 @@ public class MyBot : IChessBot
 // A set of heuristics
 public class EvalMetrics
 {
-    public static double ControlCenter(ulong bitBoard)
+    Board _board;
+    Func<Board, ulong> _getBitBoard = b => b.IsWhiteToMove ? b.WhitePiecesBitboard : b.BlackPiecesBitboard;
+    ulong bitBoard;
+
+    public EvalMetrics(Board board)
     {
+        _board = board;
+        bitBoard = _getBitBoard(_board);
+    }
+
+    public double ControlCenter()
+    {
+        // Outer circle, Inner circle, Center
         List<ulong> regions = new() { 35538699412471296, 66125924401152, 103481868288 };
 
         int score = 0, multiplier = 1;
@@ -188,22 +195,63 @@ public class EvalMetrics
         return MembershipFunctions.Sigmoidal(score, 1, 10);
     }
 
-    public static double DevelopPieces(ulong bitBoard)
+    public double DevelopPieces()
+    {
+        // 8th rank, 1st rank
+        List<ulong> regions = new() { 18374686479671623680, 255 };
+
+        double score = 0;
+        foreach (ulong region in regions)
+        {
+            ulong overlap = region & bitBoard;
+
+            // Count number of ones in binary representation
+            while (overlap > 0)
+            {
+                // Increase count if the least significant bit is 1
+                score += (int)overlap & 1;
+
+                // Right shift the bits of overlap
+                overlap >>= 1;
+            }
+        }
+
+        score = 8 - score;
+
+        return MembershipFunctions.Sigmoidal(score, 1, 10);
+    }
+
+
+    public double ComparePins()
     {
         return 0;
     }
 
-    public static double ComparePins(ulong bitBoard)
+    public double MaterialAdvantage()
     {
-        return 0;
+        int[] pieceValues = { 0, 100, 300, 300, 500, 900 };
+
+        double score = 0;
+        for (int r = 1; r < 9; r++)
+        {
+            for (int f = 0; f < 8; f++)
+            {
+                var piece = _board.GetPiece(new Square($"{(char)('a' + f)}{r}"));
+                int index = 8 * (r - 1) + f;
+                bool isMyPiece = ((bitBoard >> index) & 1) != 0;
+
+                if (piece != null && isMyPiece && !piece.IsKing)
+                {
+                    score += pieceValues[(int)piece.PieceType];
+                }
+            }
+        }
+
+        return  MembershipFunctions.Sigmoidal(score, 0.002, 1950) * 3;
     }
 
-    public static double MaterialAdvantage(ulong bitBoard)
-    {
-        return 0;
-    }
 
-    public static double DefendHangingPiece(ulong bitBoard)
+    public double DefendHangingPiece()
     {
         return 0;
     }
