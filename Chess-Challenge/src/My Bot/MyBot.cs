@@ -40,7 +40,7 @@ public class MyBot : IChessBot
         foreach (Move move in moves)
         {
             board.MakeMove(move);
-            double score = -Minimax(board, 3, double.NegativeInfinity, double.PositiveInfinity);
+            double score = -Minimax(board, 5, double.NegativeInfinity, double.PositiveInfinity);
             board.UndoMove(move);
 
             // Update the best move and the best score.
@@ -50,6 +50,8 @@ public class MyBot : IChessBot
                 bestScore = score;
             }
         }
+
+        
 
         // Return the best move.
         return bestMove;
@@ -100,58 +102,11 @@ public class MyBot : IChessBot
                 else
                 {
                     score -= (double)method.Invoke(evalMetrics, null);
-                } 
+                }
             }
         }
 
         return score;
-    }
-
-    private ulong GetMyBitBoard(Board board)
-    {
-        return board.IsWhiteToMove ? board.WhitePiecesBitboard : board.BlackPiecesBitboard;
-    }
-
-    private ulong GetEnemyBitBoard(Board board, ulong myBitBoard)
-    {
-        return board.AllPiecesBitboard ^ myBitBoard;
-    }
-
-    public void AddCandidateMove(List<CandidateMove> candidateMoves, CandidateMove newMove)
-    {
-        // If the list is not full, just add the new move
-        if (candidateMoves.Count < 5)
-        {
-            candidateMoves.Add(newMove);
-            return;
-        }
-
-        // Find the move with the worst score
-        double minScore = candidateMoves.Min(move => move.myScore);
-        CandidateMove worstMove = candidateMoves.First(move => move.myScore == minScore);
-
-        // If the new move has a better score, replace the worst move
-        if (newMove.myScore > worstMove.myScore)
-        {
-            candidateMoves.Remove(worstMove);
-            candidateMoves.Add(newMove);
-        }
-    }
-
-    private ulong SimulateMove(Move move, ref ulong bitBoard)
-    {
-        BitboardHelper.SetSquare(ref bitBoard, move.TargetSquare);
-        BitboardHelper.ClearSquare(ref bitBoard, move.StartSquare);
-
-        return bitBoard;
-    }
-
-    private ulong UndoSimulatedMove(Move move, ref ulong bitBoard)
-    {
-        BitboardHelper.SetSquare(ref bitBoard, move.StartSquare);
-        BitboardHelper.ClearSquare(ref bitBoard, move.TargetSquare);
-
-        return bitBoard;
     }
 }
 
@@ -162,6 +117,7 @@ public class EvalMetrics
     Func<Board, ulong> _getBitBoard = b => b.IsWhiteToMove ? b.WhitePiecesBitboard : b.BlackPiecesBitboard;
     ulong bitBoard;
 
+
     public EvalMetrics(Board board)
     {
         _board = board;
@@ -170,6 +126,7 @@ public class EvalMetrics
 
     public double ControlCenter()
     {
+
         // Outer circle, Inner circle, Center
         List<ulong> regions = new() { 35538699412471296, 66125924401152, 103481868288 };
 
@@ -232,22 +189,21 @@ public class EvalMetrics
         int[] pieceValues = { 0, 100, 300, 300, 500, 900 };
 
         double score = 0;
-        for (int r = 1; r < 9; r++)
-        {
-            for (int f = 0; f < 8; f++)
-            {
-                var piece = _board.GetPiece(new Square($"{(char)('a' + f)}{r}"));
-                int index = 8 * (r - 1) + f;
-                bool isMyPiece = ((bitBoard >> index) & 1) != 0;
 
-                if (piece != null && isMyPiece && !piece.IsKing)
+        for (int i = 0; i < 64; i++)
+        {
+            if (((bitBoard >> i) & 1) != 0)
+            {
+                var piece = _board.GetPiece(new Square(i));
+
+                if (!piece.IsKing)
                 {
                     score += pieceValues[(int)piece.PieceType];
                 }
             }
         }
 
-        return  MembershipFunctions.Sigmoidal(score, 0.002, 1950) * 3;
+        return MembershipFunctions.Sigmoidal(score, 0.002, 3950) * 3;
     }
 
 
