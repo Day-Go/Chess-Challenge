@@ -3,218 +3,217 @@ using System;
 using System.Numerics;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net.NetworkInformation;
 using System.Reflection;
+
+public struct CandidateMove
+{
+    public Move move;
+    public double myScore;
+    public double enemyScore;
+}
 
 public class MyBot : IChessBot
 {
-
+    Utils _utils;
     MethodInfo[] _methods;
 
     public MyBot()
     {
-        _methods = typeof(FuzzyRules).GetMethods();
+        _methods = typeof(EvalMetrics).GetMethods();
+        _utils = new Utils();
     }
 
     public Move Think(Board board, Timer timer)
     {
-        double minFitness = 100;
-        double fitness;
+        ulong myPieceBitboard;
+        ulong enemyPieceBitBoard;
 
+        List<CandidateMove> candidateMoves = new ();
+
+        // Evaulate moves
         Move[] moves = board.GetLegalMoves();
+
         Move nextMove = moves[0];
 
         foreach (Move move in moves)
         {
             board.MakeMove(move);
-            fitness = ExecuteEvaluationLoop(board, move, minFitness, false);
+
+            myPieceBitboard = GetMyBitBoard(board);
+            enemyPieceBitBoard = GetEnemyBitBoard(board, myPieceBitboard);
+
+            double myScore = ExecuteEvalLoop(myPieceBitboard);
+            double enemyScore = ExecuteEvalLoop(enemyPieceBitBoard);
+
+            AddCandidateMove(candidateMoves, new CandidateMove { 
+                move = move, myScore = myScore, enemyScore = enemyScore });
+
+            board.UndoMove(move);
+        }
+
+        double maxScore = -100;
+        foreach (CandidateMove candidateMove in candidateMoves)
+        {
+            // Make move so enemy has updated board
+            board.MakeMove(candidateMove.move);
 
             Move[] enemyMoves = board.GetLegalMoves();
-
-            foreach (Move enemyMove in enemyMoves)
+            foreach (Move move in enemyMoves)
             {
-                board.MakeMove(enemyMove);
-                fitness = ExecuteEvaluationLoop(board, enemyMove, minFitness, true);
+                // Make move so enemy has updated board
+                board.MakeMove(move);
 
-                if (fitness < minFitness)
+                myPieceBitboard = GetMyBitBoard(board);
+                enemyPieceBitBoard = GetEnemyBitBoard(board, myPieceBitboard);
+
+                double myScore = ExecuteEvalLoop(myPieceBitboard);
+                double enemyScore = ExecuteEvalLoop(enemyPieceBitBoard);
+
+                if (myScore - enemyScore > maxScore)
                 {
-                    minFitness = fitness;
-                    nextMove = move;
+                    nextMove = candidateMove.move;
+                    maxScore = myScore - enemyScore;
                 }
 
-                board.UndoMove(enemyMove);
+
+                board.UndoMove(move);
             }
-            board.UndoMove(move);
 
 
+            board.UndoMove(candidateMove.move);
         }
+
 
         return nextMove;
     }
 
-    private double ExecuteEvaluationLoop(Board board, Move move, double maxFitness, bool flipMove)
+
+    private double ExecuteEvalLoop(ulong bitBoard)
     {
-
-        // Instantiate rules on each move.
-        // More cpu intensive but less tokens. 
-        FuzzyRules rules = new(board, flipMove);
-
-        double fitness = 0;
+        double score = 0;
         // Apply all rules
         foreach (MethodInfo method in _methods)
         {
             // Check if the method has any parameters, since your methods are parameterless.
             ParameterInfo[] parameters = method.GetParameters();
-            if (parameters.Length == 0 && method.ReturnType == typeof(double))
+            if (parameters.Length == 1 && parameters[0].ParameterType == typeof(ulong))
             {
-                // If it's a static method, the first argument is null.
-                // Otherwise, pass in the instance of the class (fuzzyRulesInstance).
-                fitness += (double)method.Invoke(rules, null);
+                // If method requires ulong argument, invoke with the required argument
+                score += (double) method.Invoke(null, new object[] { bitBoard });
             }
         }
 
-        Console.WriteLine($"{move.StartSquare} -> {move.TargetSquare}");
-        Console.WriteLine($"{fitness}");
-        Console.WriteLine($"{maxFitness}");
-        Console.WriteLine($"");
-
-        return fitness;
+        return score;
     }
-}
 
-public class TacticAnalyser
-{
+    private ulong GetMyBitBoard(Board board)
+    {
+        return board.IsWhiteToMove ? board.WhitePiecesBitboard : board.BlackPiecesBitboard;
+    }
 
+    private ulong GetEnemyBitBoard(Board board, ulong myBitBoard)
+    {
+        return board.AllPiecesBitboard ^ myBitBoard;
+    }
+
+    public void AddCandidateMove(List<CandidateMove> candidateMoves, CandidateMove newMove)
+    {
+        // If the list is not full, just add the new move
+        if (candidateMoves.Count < 5)
+        {
+            candidateMoves.Add(newMove);
+            return;
+        }
+
+        // Find the move with the worst score
+        double minScore = candidateMoves.Min(move => move.myScore);
+        CandidateMove worstMove = candidateMoves.First(move => move.myScore == minScore);
+
+        // If the new move has a better score, replace the worst move
+        if (newMove.myScore > worstMove.myScore)
+        {
+            candidateMoves.Remove(worstMove);
+            candidateMoves.Add(newMove);
+        }
+    }
+
+    private void Search(Board board, int depth) 
+    {
+        
+    }
+
+    private ulong SimulateMove(Move move, ref ulong bitBoard)
+    {
+        BitboardHelper.SetSquare(ref bitBoard, move.TargetSquare);
+        BitboardHelper.ClearSquare(ref bitBoard, move.StartSquare);
+
+        return bitBoard;
+    }
+
+    private ulong UndoSimulatedMove(Move move, ref ulong bitBoard)
+    {
+        BitboardHelper.SetSquare(ref bitBoard, move.StartSquare);
+        BitboardHelper.ClearSquare(ref bitBoard, move.TargetSquare);
+
+        return bitBoard;
+    }
 }
 
 // A set of heuristics
-public class FuzzyRules
+public class EvalMetrics
 {
-    Utils _utils;
-    Board _board;
-
-    bool isWhite;
-    ulong myPiecesBitBoard;
-    ulong enemyPiecesBitBoard;
-
-    string myPiecesBitBoardString;
-    string enemyPiecesBitBoardString;
-
-    List<List<int>> myPiecesBitBoardArray;
-    List<List<int>> enemyPiecesBitBoardArray;
-
-
-    public FuzzyRules(Board board, bool flipMove)
+    public static double ControlCenter(ulong bitBoard)
     {
-        _utils = new Utils();
-        _board = board;
+        List<ulong> regions = new() { 35538699412471296, 66125924401152, 103481868288 };
 
-        // Pre-assign commonly used values to save tokens
-        isWhite = flipMove ? !board.IsWhiteToMove : board.IsWhiteToMove;
-        myPiecesBitBoard = isWhite ? board.BlackPiecesBitboard : board.WhitePiecesBitboard;
-        enemyPiecesBitBoard = isWhite ? board.WhitePiecesBitboard : board.BlackPiecesBitboard;
+        int score = 0, multiplier = 1;
 
-        // Preprocessing for representations that are used across multiple methods.
-        myPiecesBitBoardString = _utils.BitBoardToString(myPiecesBitBoard);
-        enemyPiecesBitBoardString = _utils.BitBoardToString(enemyPiecesBitBoard);
-
-        myPiecesBitBoardArray = _utils.BitBoardStringToIntArray(myPiecesBitBoardString);
-        enemyPiecesBitBoardArray = _utils.BitBoardStringToIntArray(enemyPiecesBitBoardString);
-    }
-
-    // Implement a set of basic rules
-    public double ControlCenter()
-    {
-        Func<int, int> calculateDistance = x => x < 4 ? x : 7 - x;
-
-        var boardCenterMask = Enumerable.Range(0, 8)
-                                        .Select(i => Enumerable.Range(0, 8)
-                                                               .Select(j => calculateDistance(i) + calculateDistance(j))
-                                                               .ToList())
-                                        .ToList();
-
-        double myCenterControl = 0;
-        double enemyCenterControl = 0;
-
-        for (int r = 0; r < 8; r++)
+        foreach (ulong region in regions)
         {
-            for (int f = 0; f < 8; f++)
+            ulong overlap = region & bitBoard;
+
+            // Count number of ones in binary representation
+            while (overlap > 0)
             {
-                myCenterControl += myPiecesBitBoardArray[r][f] * boardCenterMask[r][f];
-                enemyCenterControl += enemyPiecesBitBoardArray[r][f] * boardCenterMask[r][f];
+                // Increase count if the least significant bit is 1
+                score += (int)overlap & 1 * multiplier;
+
+                // Right shift the bits of overlap
+                overlap >>= 1;
             }
+
+            multiplier += 2;
         }
 
-        Console.WriteLine(myCenterControl);
-        Console.WriteLine(enemyCenterControl);
-
-        var res = MembershipFunctions.Sigmoidal(myCenterControl / enemyCenterControl, 0.5, 4);
-        Console.WriteLine($"con - {res}");
-        return MembershipFunctions.Sigmoidal(myCenterControl / enemyCenterControl, 0.5, 4);
+        return MembershipFunctions.Sigmoidal(score, 1, 10);
     }
 
-    public double DevelopPieces()
-    {
-        double myDevelopment = isWhite ? myPiecesBitBoardArray[0].Count(i => i == 1) :
-                                         myPiecesBitBoardArray[7].Count(i => i == 1);
-
-        double enemyDevelopment = !isWhite ? enemyPiecesBitBoardArray[0].Count(i => i == 1) :
-                                             enemyPiecesBitBoardArray[7].Count(i => i == 1);
-
-        var res = MembershipFunctions.Sigmoidal(enemyDevelopment / myDevelopment, 0.5, 4);
-        Console.WriteLine($"dev - {res}");
-        return MembershipFunctions.Sigmoidal(enemyDevelopment / myDevelopment, 0.5, 4);
-    }
-
-    public double ComparePins()
+    public static double DevelopPieces(ulong bitBoard)
     {
         return 0;
     }
 
-    public double MaterialAdvantage()
+    public static double ComparePins(ulong bitBoard)
     {
-        int[] pieceValues = { 0, 100, 300, 300, 500, 900, 10000 };
-        double[] materials = { 0, 0 };
-
-        for (int r = 1; r < 9; r++)
-        {
-            for (int f = 0; f < 8; f++)
-            {
-                var piece = _board.GetPiece(new Square($"{(char)('a' + f)}{r}"));
-                materials[piece.IsWhite == isWhite ? 0 : 1] += pieceValues[(int)piece.PieceType];
-            }
-        }
-
-        var res = MembershipFunctions.Sigmoidal(materials[0] / materials[1], 0.5, 1.5);
-        Console.WriteLine($"mat - {res}");
-        return MembershipFunctions.Sigmoidal(materials[0] / materials[1], 0.5, 1.5);
+        return 0;
     }
 
-    public double DefendHangingPiece()
+    public static double MaterialAdvantage(ulong bitBoard)
     {
-        // Count hanging pieces and value
+        return 0;
+    }
+
+    public static double DefendHangingPiece(ulong bitBoard)
+    {
         return 0;
     }
 }
 
-public enum PieceValues
-{
-
-}
 
 // the methods in this class will be passed a single value from the result of a rule
 // depending on game state we will use different membership functions of different rules. 
 public class MembershipFunctions
 {
-    public static double Triangular(double x, double a, double b, double c) =>
-        x <= a || x >= c ? 0.0 : x < b ? (x - a) / (b - a) : (c - x) / (c - b);
-
-    public static double Trapezoidal(double x, double a, double b, double c, double d) =>
-        x <= a || x >= d ? 0.0 : x < b ? (x - a) / (b - a) : x <= c ? 1.0 : (d - x) / (d - c);
-
-    public static double Gaussian(double x, double mean, double standardDeviation) =>
-        Math.Exp(-0.5 * Math.Pow((x - mean) / standardDeviation, 2));
-
     public static double Sigmoidal(double x, double a, double c) =>
         1.0 / (1.0 + Math.Exp(-a * (x - c)));
 }
@@ -222,37 +221,8 @@ public class MembershipFunctions
 
 public class Utils
 {
-    //public ulong FlipBitBoard(ulong b) => 
-    //    Enumerable.Range(0, 64).Aggregate(0UL, (r, i) => 
-    //    r | (((b >> i) & 1) << (63 - i)));
-
-    // original implementation
-    public ulong FlipBitBoard(ulong pieceBitBoard)
-    {
-        ulong reversed = 0;
-        for (int i = 0; i < 64; i++)
-        {
-            ulong bit = (pieceBitBoard >> i) & 1;
-            reversed |= bit << (63 - i);
-        }
-        return reversed;
-    }
-
     public string BitBoardToString(ulong pieceBitBoard)
     {
         return Convert.ToString((long)pieceBitBoard, 2).PadLeft(64, '0');
     }
-
-    public List<List<int>> BitBoardStringToIntArray(string bitBoard)
-    {
-        int size = 8;  // Size of one dimension
-
-        return Enumerable.Range(0, size)
-            .Select(i => Enumerable.Range(0, size)
-                .Select(j => int.Parse(bitBoard[j + i * size].ToString()))
-                .ToList())
-            .ToList();
-    }
-
-
 }
