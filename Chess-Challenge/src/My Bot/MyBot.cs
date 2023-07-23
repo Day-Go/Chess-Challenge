@@ -3,8 +3,9 @@ using System;
 using System.Numerics;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
-using System.ComponentModel;
+
+
+
 
 public struct CandidateMove
 {
@@ -16,13 +17,13 @@ public struct CandidateMove
 public class MyBot : IChessBot
 {
     Utils _utils;
-    MethodInfo[] _methods;
     bool botIsWhite;
+    EvalMetrics _evalMetrics;
 
     public MyBot()
     {
-        _methods = typeof(EvalMetrics).GetMethods();
         _utils = new Utils();
+        _evalMetrics = new EvalMetrics();
     }
 
     public Move Think(Board board, Timer timer)
@@ -40,7 +41,7 @@ public class MyBot : IChessBot
         foreach (Move move in moves)
         {
             board.MakeMove(move);
-            double score = -Minimax(board, 5, double.NegativeInfinity, double.PositiveInfinity);
+            double score = -Minimax(board, 3, double.NegativeInfinity, double.PositiveInfinity);
             board.UndoMove(move);
 
             // Update the best move and the best score.
@@ -50,8 +51,6 @@ public class MyBot : IChessBot
                 bestScore = score;
             }
         }
-
-        
 
         // Return the best move.
         return bestMove;
@@ -85,26 +84,11 @@ public class MyBot : IChessBot
 
     private double ExecuteEvalLoop(Board board)
     {
-        EvalMetrics evalMetrics = new(board);
-
         double score = 0;
-        foreach (MethodInfo method in _methods)
-        {
-            // Check if the method has any parameters, since your methods are parameterless.
-            ParameterInfo[] parameters = method.GetParameters();
-            if (parameters.Length == 0 && method.ReturnType == typeof(double))
-            {
-                // If method requires ulong argument, invoke with the required argument
-                if (board.IsWhiteToMove == botIsWhite)
-                {
-                    score += (double)method.Invoke(evalMetrics, null);
-                }
-                else
-                {
-                    score -= (double)method.Invoke(evalMetrics, null);
-                }
-            }
-        }
+
+        score += (board.IsWhiteToMove == botIsWhite ? 1 : -1) * _evalMetrics.ControlCenter(board);
+        score += (board.IsWhiteToMove == botIsWhite ? 1 : -1) * _evalMetrics.DevelopPieces(board);
+        score += (board.IsWhiteToMove == botIsWhite ? 1 : -1) * _evalMetrics.TotalMaterial(board);
 
         return score;
     }
@@ -113,20 +97,17 @@ public class MyBot : IChessBot
 // A set of heuristics
 public class EvalMetrics
 {
-    Board _board;
     Func<Board, ulong> _getBitBoard = b => b.IsWhiteToMove ? b.WhitePiecesBitboard : b.BlackPiecesBitboard;
-    ulong bitBoard;
+    Dictionary<ulong, double> controlCache = new Dictionary<ulong, double>();
+    Dictionary<ulong, double> developCache = new Dictionary<ulong, double>();
+    Dictionary<ulong, double> materialCache = new Dictionary<ulong, double>();
+    int[] pieceValues = { 0, 100, 300, 300, 500, 900 };
 
-
-    public EvalMetrics(Board board)
+    public double ControlCenter(Board board)
     {
-        _board = board;
-        bitBoard = _getBitBoard(_board);
-    }
+        ulong bitBoard = _getBitBoard(board);
 
-    public double ControlCenter()
-    {
-
+        if (controlCache.ContainsKey(bitBoard)) return controlCache[bitBoard];
         // Outer circle, Inner circle, Center
         List<ulong> regions = new() { 35538699412471296, 66125924401152, 103481868288 };
 
@@ -149,13 +130,22 @@ public class EvalMetrics
             multiplier += 2;
         }
 
-        return MembershipFunctions.Sigmoidal(score, 1, 10);
+        double result = MembershipFunctions.Sigmoidal(score, 1, 10);
+        controlCache[bitBoard] = result;
+
+        return result;
     }
 
-    public double DevelopPieces()
+    public double DevelopPieces(Board board)
     {
+        ulong bitBoard = _getBitBoard(board);
+
+        if (developCache.ContainsKey(bitBoard)) return developCache[bitBoard];
+
         // 8th rank, 1st rank
         List<ulong> regions = new() { 18374686479671623680, 255 };
+
+
 
         double score = 0;
         foreach (ulong region in regions)
@@ -173,20 +163,23 @@ public class EvalMetrics
             }
         }
 
-        score = 8 - score;
+        double result = MembershipFunctions.Sigmoidal(score, 1, 10);
+        developCache[bitBoard] = result;
 
-        return MembershipFunctions.Sigmoidal(score, 1, 10);
+        return result;
     }
+ 
 
-
-    public double ComparePins()
+    public double ComparePins(Board board)
     {
         return 0;
     }
 
-    public double MaterialAdvantage()
+    public double TotalMaterial(Board board)
     {
-        int[] pieceValues = { 0, 100, 300, 300, 500, 900 };
+        ulong bitBoard = _getBitBoard(board);
+
+        if (materialCache.ContainsKey(bitBoard)) return materialCache[bitBoard];
 
         double score = 0;
 
@@ -194,7 +187,7 @@ public class EvalMetrics
         {
             if (((bitBoard >> i) & 1) != 0)
             {
-                var piece = _board.GetPiece(new Square(i));
+                var piece = board.GetPiece(new Square(i));
 
                 if (!piece.IsKing)
                 {
@@ -203,14 +196,31 @@ public class EvalMetrics
             }
         }
 
-        return MembershipFunctions.Sigmoidal(score, 0.002, 3950) * 3;
+
+        double result = MembershipFunctions.Sigmoidal(score, 0.002, 1950) * 10;
+        materialCache[bitBoard] = result;
+
+        return result;
     }
 
 
-    public double DefendHangingPiece()
+    public double DefendHangingPiece(Board board)
     {
         return 0;
     }
+
+    // Kernighan's bit counting algorithm
+    private int CountSetBits(ulong n)
+    {
+        int count = 0;
+        while (n != 0)
+        {
+            n &= (n - 1);
+            count++;
+        }
+        return count;
+    }
+
 }
 
 
