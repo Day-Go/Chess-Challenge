@@ -35,7 +35,7 @@ public class MyBot : IChessBot
 
         Move bestMove = moves[0];
         double bestScore = double.NegativeInfinity;
-        foreach (Move move in moves)
+        foreach (Move move in OrderMoves(moves))
         {
             board.MakeMove(move);
             double score = -Minimax(board, 3, double.NegativeInfinity, double.PositiveInfinity);
@@ -54,6 +54,25 @@ public class MyBot : IChessBot
         return bestMove;
     }
 
+
+    List<Move> OrderMoves(Move[] moves)
+    {
+        List<Move> orderedMoves = new List<Move>();
+        foreach (Move move in moves)
+        {
+            if (move.IsCapture || move.IsPromotion)
+            {
+                orderedMoves.Insert(0, move);
+            }
+            else
+            {
+                orderedMoves.Add(move);
+            }
+        }
+        return orderedMoves;
+    }
+
+
     private double Minimax(Board board, int depth, double alpha, double beta)
     {
         if (depth == 0)
@@ -71,7 +90,7 @@ public class MyBot : IChessBot
         Move[] moves = board.GetLegalMoves();
         double score = double.NegativeInfinity;
 
-        foreach (Move move in moves)
+        foreach (Move move in OrderMoves(moves))
         {
             board.MakeMove(move);
             score = Math.Max(score, -Minimax(board, depth - 1, -beta, -alpha));
